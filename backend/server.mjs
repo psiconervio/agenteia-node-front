@@ -10,32 +10,42 @@ import { dirname } from 'path';
 
 const app = express();
 const port = 3000;
+
+// Configuración de OpenAI y ChromaDB
 const openai = new OpenAI({ apiKey: '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' });
 const chroma = new ChromaClient();
 const collectionName = 'document_chunks';
-const documentsPath = path.join(__dirname, 'documents');
-// Nombre del archivo que contiene el PDF a usar como contexto
-const targetFile = path.join(documentsPath, 'document.pdf');
+
+// Obtener __dirname en módulos ES
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-if (!fs.existsSync(documentsPath)) {
-  fs.mkdirSync(documentsPath);
-}
+// Como queremos usar document.pdf al mismo nivel que server.mjs,
+// definimos targetFile apuntando directamente al archivo en __dirname.
+const targetFile = path.join(__dirname, 'document.pdf');
+
+// Imprime la ruta para depuración
 console.log(`Buscando archivo en: ${targetFile}`);
 
-app.use(express.json());
+// Verifica que el archivo exista. Si no, se detiene la ejecución.
+if (!fs.existsSync(targetFile)) {
+  console.error(`El archivo no existe en: ${targetFile}`);
+  process.exit(1);
+}
 
 // Inicializa la colección en ChromaDB
 async function initializeChroma() {
   await chroma.createCollection({ name: collectionName });
+  console.log(`Colección '${collectionName}' inicializada.`);
 }
-initializeChroma();
+initializeChroma().catch((err) =>
+  console.error('Error inicializando ChromaDB:', err)
+);
 
 // Función para extraer el texto del archivo
 async function processFile(filePath) {
-  let text = '';
   const ext = path.extname(filePath).toLowerCase();
+  let text = '';
   if (ext === '.pdf') {
     const data = await pdfParse(fs.readFileSync(filePath));
     text = data.text;
@@ -45,11 +55,11 @@ async function processFile(filePath) {
   return text;
 }
 
-// Almacena los fragmentos (chunks) en ChromaDB junto con su metadata
+// Almacena los fragmentos (chunks) en ChromaDB
 async function storeChunks(chunks, fileName) {
   const embeddings = await openai.embeddings.create({
     model: 'text-embedding-ada-002',
-    input: chunks.map(chunk => chunk.text)
+    input: chunks.map((chunk) => chunk.text),
   });
 
   const collection = await chroma.getCollection(collectionName);
@@ -57,60 +67,55 @@ async function storeChunks(chunks, fileName) {
     await collection.add({
       ids: [chunks[i].id],
       embeddings: [embeddings.data[i].embedding],
-      metadatas: [{ text: chunks[i].text, file: fileName }]
+      metadatas: [{ text: chunks[i].text, file: fileName }],
     });
   }
+  console.log(`Fragmentos almacenados en ChromaDB para '${fileName}'.`);
 }
 
-// Procesa el documento dividiéndolo en fragmentos
+// Procesa el documento dividiéndolo en fragmentos de hasta 500 caracteres.
 async function processDocument(filePath) {
   const fileName = path.basename(filePath);
   const text = await processFile(filePath);
-  // Separamos el texto en fragmentos de hasta 500 caracteres.
-  // Puedes ajustar el tamaño según tus necesidades.
-  const chunks = text.match(/[\s\S]{1,500}/g).map(chunk => ({
+  const chunks = text.match(/[\s\S]{1,500}/g).map((chunk) => ({
     id: uuidv4(),
-    text: chunk
+    text: chunk,
   }));
   await storeChunks(chunks, fileName);
-  console.log(`Documento ${fileName} procesado y almacenado en ChromaDB.`);
+  console.log(`Documento '${fileName}' procesado y almacenado en ChromaDB.`);
 }
 
-// Al iniciar el servidor, procesa el archivo si existe
-if (fs.existsSync(targetFile)) {
-  processDocument(targetFile).catch(err => console.error(err));
-} else {
-  console.warn(`El archivo ${targetFile} no se encontró. Por favor, colócalo en la carpeta ${documentsPath}.`);
-}
+// Procesa el documento al iniciar el servidor
+processDocument(targetFile).catch((err) => console.error(err));
 
-// Endpoint para hacer preguntas
+app.use(express.json());
+
+// Endpoint para realizar preguntas
 app.post('/ask', async (req, res) => {
   const { question } = req.body;
   if (!question)
     return res.status(400).json({ error: 'Falta la pregunta en el body.' });
 
-  // Genera el embedding de la pregunta
-  const embedding = await openai.embeddings.create({
-    model: 'text-embedding-ada-002',
-    input: [question]
-  });
-
-  // Consulta en ChromaDB buscando fragmentos del documento (si solo hay uno, no es necesario filtrar)
-  const collection = await chroma.getCollection(collectionName);
-  const searchResults = await collection.query({
-    queryEmbeddings: [embedding.data[0].embedding],
-    nResults: 5,
-    // Si tienes más de un documento y deseas filtrar, puedes usar:
-    // where: { file: 'document.pdf' }
-  });
-
-  // Une los fragmentos más relevantes
-  const relevantChunks = searchResults.metadatas.flat().map(meta => meta.text).join('\n');
-
-  // Crea el prompt para el modelo de OpenAI
-  const prompt = `Basado en el siguiente contenido, responde la pregunta de manera precisa:\n\n${relevantChunks}\n\nPregunta: ${question}\nRespuesta:`;
-
   try {
+    // Genera el embedding de la pregunta
+    const embedding = await openai.embeddings.create({
+      model: 'text-embedding-ada-002',
+      input: [question],
+    });
+
+    const collection = await chroma.getCollection(collectionName);
+    const searchResults = await collection.query({
+      queryEmbeddings: [embedding.data[0].embedding],
+      nResults: 5,
+    });
+
+    const relevantChunks = searchResults.metadatas
+      .flat()
+      .map((meta) => meta.text)
+      .join('\n');
+
+    const prompt = `Basado en el siguiente contenido, responde la pregunta de manera precisa:\n\n${relevantChunks}\n\nPregunta: ${question}\nRespuesta:`;
+
     const response = await openai.completions.create({
       model: 'gpt-4-turbo',
       prompt,
@@ -123,9 +128,287 @@ app.post('/ask', async (req, res) => {
   }
 });
 
+// Inicia el servidor
 app.listen(port, () => {
   console.log(`Servidor corriendo en http://localhost:${port}`);
 });
+
+// import express from 'express';
+// import fs from 'fs';
+// import path from 'path';
+// import { OpenAI } from 'openai';
+// import pdfParse from 'pdf-parse';
+// import { v4 as uuidv4 } from 'uuid';
+// import { ChromaClient } from 'chromadb';
+// import { fileURLToPath } from 'url';
+// import { dirname } from 'path';
+
+// const app = express();
+// const port = 3000;
+
+// // Configuración de OpenAI y ChromaDB
+// const openai = new OpenAI({ apiKey: 'sk-your-api-key' });
+// const chroma = new ChromaClient();
+// const collectionName = 'document_chunks';
+
+// // Obtener __dirname en módulos ES
+// const __filename = fileURLToPath(import.meta.url);
+// const __dirname = dirname(__filename);
+
+// // CONFIGURACIÓN DE RUTAS
+// // Opción 1: Si usas el archivo "document.pdf" que está en la carpeta "documents"
+// const documentsPath = path.join(__dirname, 'documents');
+// const targetFile = path.join(documentsPath, 'document.pdf');
+
+// // Opción 2: Si en cambio deseas usar "05-versions-space.pdf" que se encuentra en "test/data"
+// // const documentsPath = path.join(__dirname, 'test', 'data');
+// // const targetFile = path.join(documentsPath, '05-versions-space.pdf');
+
+// // Asegúrate de que la carpeta exista (para Opción 1 o 2 según corresponda)
+// if (!fs.existsSync(documentsPath)) {
+//   fs.mkdirSync(documentsPath, { recursive: true });
+//   console.log(`Carpeta creada: ${documentsPath}`);
+// } else {
+//   console.log(`Carpeta existente: ${documentsPath}`);
+// }
+
+// // Imprime la ruta para depuración
+// console.log(`Buscando archivo en: ${targetFile}`);
+
+// // Inicializa la colección en ChromaDB
+// async function initializeChroma() {
+//   await chroma.createCollection({ name: collectionName });
+//   console.log(`Colección '${collectionName}' inicializada.`);
+// }
+// initializeChroma().catch((err) =>
+//   console.error('Error inicializando ChromaDB:', err)
+// );
+
+// // Función para extraer el texto del archivo
+// async function processFile(filePath) {
+//   const ext = path.extname(filePath).toLowerCase();
+//   let text = '';
+//   if (ext === '.pdf') {
+//     const data = await pdfParse(fs.readFileSync(filePath));
+//     text = data.text;
+//   } else {
+//     text = fs.readFileSync(filePath, 'utf-8');
+//   }
+//   return text;
+// }
+
+// // Almacena los fragmentos (chunks) en ChromaDB
+// async function storeChunks(chunks, fileName) {
+//   const embeddings = await openai.embeddings.create({
+//     model: 'text-embedding-ada-002',
+//     input: chunks.map((chunk) => chunk.text),
+//   });
+
+//   const collection = await chroma.getCollection(collectionName);
+//   for (let i = 0; i < chunks.length; i++) {
+//     await collection.add({
+//       ids: [chunks[i].id],
+//       embeddings: [embeddings.data[i].embedding],
+//       metadatas: [{ text: chunks[i].text, file: fileName }],
+//     });
+//   }
+//   console.log(`Fragmentos almacenados en ChromaDB para '${fileName}'.`);
+// }
+
+// // Procesa el documento dividiéndolo en fragmentos
+// async function processDocument(filePath) {
+//   const fileName = path.basename(filePath);
+//   const text = await processFile(filePath);
+//   const chunks = text.match(/[\s\S]{1,500}/g).map((chunk) => ({
+//     id: uuidv4(),
+//     text: chunk,
+//   }));
+//   await storeChunks(chunks, fileName);
+//   console.log(`Documento '${fileName}' procesado correctamente.`);
+// }
+
+// // Verifica si el archivo existe al iniciar
+// if (fs.existsSync(targetFile)) {
+//   processDocument(targetFile).catch((err) => console.error(err));
+// } else {
+//   console.warn(
+//     `El archivo '${targetFile}' no se encontró. Asegúrate de que esté en la carpeta correcta.`
+//   );
+// }
+
+// // Endpoint para preguntas
+// app.use(express.json());
+// app.post('/ask', async (req, res) => {
+//   const { question } = req.body;
+//   if (!question)
+//     return res.status(400).json({ error: 'Falta la pregunta en el body.' });
+
+//   try {
+//     // Genera el embedding de la pregunta
+//     const embedding = await openai.embeddings.create({
+//       model: 'text-embedding-ada-002',
+//       input: [question],
+//     });
+
+//     const collection = await chroma.getCollection(collectionName);
+//     const searchResults = await collection.query({
+//       queryEmbeddings: [embedding.data[0].embedding],
+//       nResults: 5,
+//     });
+
+//     const relevantChunks = searchResults.metadatas
+//       .flat()
+//       .map((meta) => meta.text)
+//       .join('\n');
+
+//     const prompt = `Basado en el siguiente contenido, responde la pregunta de manera precisa:\n\n${relevantChunks}\n\nPregunta: ${question}\nRespuesta:`;
+
+//     const response = await openai.completions.create({
+//       model: 'gpt-4-turbo',
+//       prompt,
+//       max_tokens: 300,
+//     });
+
+//     res.json({ answer: response.choices[0].text.trim() });
+//   } catch (error) {
+//     res.status(500).json({ error: error.message });
+//   }
+// });
+
+// // Iniciar el servidor
+// app.listen(port, () => {
+//   console.log(`Servidor corriendo en http://localhost:${port}`);
+// });
+
+
+// import express from 'express';
+// import fs from 'fs';
+// import path from 'path';
+// import { OpenAI } from 'openai';
+// import pdfParse from 'pdf-parse';
+// import { v4 as uuidv4 } from 'uuid';
+// import { ChromaClient } from 'chromadb';
+// import { fileURLToPath } from 'url';
+// import { dirname } from 'path';
+
+// const app = express();
+// const port = 3000;
+// const openai = new OpenAI({ apiKey: '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' });
+// const chroma = new ChromaClient();
+// const collectionName = 'document_chunks';
+// const documentsPath = path.join(__dirname, 'documents');
+// // Nombre del archivo que contiene el PDF a usar como contexto
+// const targetFile = path.join(documentsPath, 'document.pdf');
+// const __filename = fileURLToPath(import.meta.url);
+// const __dirname = dirname(__filename);
+
+// if (!fs.existsSync(documentsPath)) {
+//   fs.mkdirSync(documentsPath);
+// }
+// console.log(`Buscando archivo en: ${targetFile}`);
+
+// app.use(express.json());
+
+// // Inicializa la colección en ChromaDB
+// async function initializeChroma() {
+//   await chroma.createCollection({ name: collectionName });
+// }
+// initializeChroma();
+
+// // Función para extraer el texto del archivo
+// async function processFile(filePath) {
+//   let text = '';
+//   const ext = path.extname(filePath).toLowerCase();
+//   if (ext === '.pdf') {
+//     const data = await pdfParse(fs.readFileSync(filePath));
+//     text = data.text;
+//   } else {
+//     text = fs.readFileSync(filePath, 'utf-8');
+//   }
+//   return text;
+// }
+
+// // Almacena los fragmentos (chunks) en ChromaDB junto con su metadata
+// async function storeChunks(chunks, fileName) {
+//   const embeddings = await openai.embeddings.create({
+//     model: 'text-embedding-ada-002',
+//     input: chunks.map(chunk => chunk.text)
+//   });
+
+//   const collection = await chroma.getCollection(collectionName);
+//   for (let i = 0; i < chunks.length; i++) {
+//     await collection.add({
+//       ids: [chunks[i].id],
+//       embeddings: [embeddings.data[i].embedding],
+//       metadatas: [{ text: chunks[i].text, file: fileName }]
+//     });
+//   }
+// }
+
+// // Procesa el documento dividiéndolo en fragmentos
+// async function processDocument(filePath) {
+//   const fileName = path.basename(filePath);
+//   const text = await processFile(filePath);
+//   // Separamos el texto en fragmentos de hasta 500 caracteres.
+//   // Puedes ajustar el tamaño según tus necesidades.
+//   const chunks = text.match(/[\s\S]{1,500}/g).map(chunk => ({
+//     id: uuidv4(),
+//     text: chunk
+//   }));
+//   await storeChunks(chunks, fileName);
+//   console.log(`Documento ${fileName} procesado y almacenado en ChromaDB.`);
+// }
+
+// // Al iniciar el servidor, procesa el archivo si existe
+// if (fs.existsSync(targetFile)) {
+//   processDocument(targetFile).catch(err => console.error(err));
+// } else {
+//   console.warn(`El archivo ${targetFile} no se encontró. Por favor, colócalo en la carpeta ${documentsPath}.`);
+// }
+
+// // Endpoint para hacer preguntas
+// app.post('/ask', async (req, res) => {
+//   const { question } = req.body;
+//   if (!question)
+//     return res.status(400).json({ error: 'Falta la pregunta en el body.' });
+
+//   // Genera el embedding de la pregunta
+//   const embedding = await openai.embeddings.create({
+//     model: 'text-embedding-ada-002',
+//     input: [question]
+//   });
+
+//   // Consulta en ChromaDB buscando fragmentos del documento (si solo hay uno, no es necesario filtrar)
+//   const collection = await chroma.getCollection(collectionName);
+//   const searchResults = await collection.query({
+//     queryEmbeddings: [embedding.data[0].embedding],
+//     nResults: 5,
+//     // Si tienes más de un documento y deseas filtrar, puedes usar:
+//     // where: { file: 'document.pdf' }
+//   });
+
+//   // Une los fragmentos más relevantes
+//   const relevantChunks = searchResults.metadatas.flat().map(meta => meta.text).join('\n');
+
+//   // Crea el prompt para el modelo de OpenAI
+//   const prompt = `Basado en el siguiente contenido, responde la pregunta de manera precisa:\n\n${relevantChunks}\n\nPregunta: ${question}\nRespuesta:`;
+
+//   try {
+//     const response = await openai.completions.create({
+//       model: 'gpt-4-turbo',
+//       prompt,
+//       max_tokens: 300,
+//     });
+
+//     res.json({ answer: response.choices[0].text.trim() });
+//   } catch (error) {
+//     res.status(500).json({ error: error.message });
+//   }
+// });
+
+// app.listen(port, () => {
+//   console.log(`Servidor corriendo en http://localhost:${port}`);
+// });
 
 // import express from 'express';
 // import fs from 'fs';
