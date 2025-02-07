@@ -1,6 +1,11 @@
 // Please install OpenAI SDK first: `npm install openai`
 
 import OpenAI from "openai";
+import dotenv from 'dotenv';
+dotenv.config();
+
+const miVariable = process.env.MI_VARIABLE;
+console.log(miVariable);
 
 const openai = new OpenAI({
         baseURL: 'https://api.deepseek.com',
