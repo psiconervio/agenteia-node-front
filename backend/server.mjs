@@ -1,26 +1,14 @@
-import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { OpenAI } from 'openai';
 import pdfParse from 'pdf-parse';
-import { v4 as uuidv4 } from 'uuid';
-import { ChromaClient } from 'chromadb';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-
-const app = express();
-const port = 3000;
-
-// Configuración de OpenAI y ChromaDB
-const openai = new OpenAI({ apiKey: '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' }); // Reemplaza con tu API key real
-const chroma = new ChromaClient();
-const collectionName = 'document_chunks';
 
 // Obtener __dirname en módulos ES
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Definir la ruta del archivo: document.pdf estará en el mismo directorio que server.mjs
+// Definir la ruta del archivo document.pdf (al mismo nivel que server.mjs)
 const targetFile = path.join(__dirname, 'document.pdf');
 
 // Mostrar en consola la ruta que se usará
@@ -32,98 +20,161 @@ if (!fs.existsSync(targetFile)) {
   process.exit(1);
 }
 
-// Función para extraer el texto del archivo
+// Función mínima para procesar el archivo y mostrar su contenido
 async function processFile(filePath) {
   console.log('Procesando archivo:', filePath);
   const ext = path.extname(filePath).toLowerCase();
   let text = '';
+  
   if (ext === '.pdf') {
-    // Leemos el archivo como buffer y lo pasamos a pdfParse
+    // Leer el archivo como buffer y parsearlo con pdf-parse
     const buffer = fs.readFileSync(filePath);
-    text = (await pdfParse(buffer)).text;
+    const data = await pdfParse(buffer);
+    text = data.text;
   } else {
+    // Para otros tipos de archivos, leer el contenido en formato UTF-8
     text = fs.readFileSync(filePath, 'utf-8');
   }
+  
   return text;
 }
 
-// Almacenar los fragmentos (chunks) en ChromaDB
-async function storeChunks(chunks, fileName) {
-  const embeddings = await openai.embeddings.create({
-    model: 'text-embedding-ada-002',
-    input: chunks.map((chunk) => chunk.text),
+// Ejecutar la función y mostrar el contenido en la consola
+processFile(targetFile)
+  .then((text) => {
+    console.log('Contenido del archivo:');
+    console.log(text);
+  })
+  .catch((err) => {
+    console.error('Error al procesar el archivo:', err);
   });
 
-  const collection = await chroma.getCollection(collectionName);
-  for (let i = 0; i < chunks.length; i++) {
-    await collection.add({
-      ids: [chunks[i].id],
-      embeddings: [embeddings.data[i].embedding],
-      metadatas: [{ text: chunks[i].text, file: fileName }],
-    });
-  }
-  console.log(`Se almacenaron los fragmentos de '${fileName}' en ChromaDB.`);
-}
+// import express from 'express';
+// import fs from 'fs';
+// import path from 'path';
+// import { OpenAI } from 'openai';
+// import pdfParse from 'pdf-parse';
+// import { v4 as uuidv4 } from 'uuid';
+// import { ChromaClient } from 'chromadb';
+// import { fileURLToPath } from 'url';
+// import { dirname } from 'path';
 
-// Procesar el documento dividiéndolo en fragmentos
-async function processDocument(filePath) {
-  const fileName = path.basename(filePath);
-  const text = await processFile(filePath);
-  // Dividir el texto en fragmentos de hasta 500 caracteres
-  const chunks = text.match(/[\s\S]{1,500}/g).map((chunk) => ({
-    id: uuidv4(),
-    text: chunk,
-  }));
-  await storeChunks(chunks, fileName);
-  console.log(`El documento '${fileName}' fue procesado correctamente.`);
-}
+// const app = express();
+// const port = 3000;
 
-// Iniciar el procesamiento del documento
-processDocument(targetFile).catch((err) => console.error(err));
+// // Configuración de OpenAI y ChromaDB
+// const openai = new OpenAI({ apiKey: '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' }); // Reemplaza con tu API key real
+// const chroma = new ChromaClient();
+// const collectionName = 'document_chunks';
 
-app.use(express.json());
+// // Obtener __dirname en módulos ES
+// const __filename = fileURLToPath(import.meta.url);
+// const __dirname = dirname(__filename);
 
-// Endpoint para responder preguntas (se mantiene igual)
-app.post('/ask', async (req, res) => {
-  const { question } = req.body;
-  if (!question)
-    return res.status(400).json({ error: 'Falta la pregunta en el body.' });
+// // Definir la ruta del archivo: document.pdf estará en el mismo directorio que server.mjs
+// const targetFile = path.join(__dirname, 'document.pdf');
 
-  try {
-    const embedding = await openai.embeddings.create({
-      model: 'text-embedding-ada-002',
-      input: [question],
-    });
+// // Mostrar en consola la ruta que se usará
+// console.log('Usando archivo:', targetFile);
 
-    const collection = await chroma.getCollection(collectionName);
-    const searchResults = await collection.query({
-      queryEmbeddings: [embedding.data[0].embedding],
-      nResults: 5,
-    });
+// // Verificar que el archivo exista
+// if (!fs.existsSync(targetFile)) {
+//   console.error(`El archivo no se encontró en: ${targetFile}`);
+//   process.exit(1);
+// }
 
-    const relevantChunks = searchResults.metadatas
-      .flat()
-      .map((meta) => meta.text)
-      .join('\n');
+// // Función para extraer el texto del archivo
+// async function processFile(filePath) {
+//   console.log('Procesando archivo:', filePath);
+//   const ext = path.extname(filePath).toLowerCase();
+//   let text = '';
+//   if (ext === '.pdf') {
+//     // Leemos el archivo como buffer y lo pasamos a pdfParse
+//     const buffer = fs.readFileSync(filePath);
+//     text = (await pdfParse(buffer)).text;
+//   } else {
+//     text = fs.readFileSync(filePath, 'utf-8');
+//   }
+//   return text;
+// }
 
-    const prompt = `Basado en el siguiente contenido, responde la pregunta de manera precisa:\n\n${relevantChunks}\n\nPregunta: ${question}\nRespuesta:`;
+// // Almacenar los fragmentos (chunks) en ChromaDB
+// async function storeChunks(chunks, fileName) {
+//   const embeddings = await openai.embeddings.create({
+//     model: 'text-embedding-ada-002',
+//     input: chunks.map((chunk) => chunk.text),
+//   });
 
-    const response = await openai.completions.create({
-      model: 'gpt-4-turbo',
-      prompt,
-      max_tokens: 300,
-    });
+//   const collection = await chroma.getCollection(collectionName);
+//   for (let i = 0; i < chunks.length; i++) {
+//     await collection.add({
+//       ids: [chunks[i].id],
+//       embeddings: [embeddings.data[i].embedding],
+//       metadatas: [{ text: chunks[i].text, file: fileName }],
+//     });
+//   }
+//   console.log(`Se almacenaron los fragmentos de '${fileName}' en ChromaDB.`);
+// }
 
-    res.json({ answer: response.choices[0].text.trim() });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+// // Procesar el documento dividiéndolo en fragmentos
+// async function processDocument(filePath) {
+//   const fileName = path.basename(filePath);
+//   const text = await processFile(filePath);
+//   // Dividir el texto en fragmentos de hasta 500 caracteres
+//   const chunks = text.match(/[\s\S]{1,500}/g).map((chunk) => ({
+//     id: uuidv4(),
+//     text: chunk,
+//   }));
+//   await storeChunks(chunks, fileName);
+//   console.log(`El documento '${fileName}' fue procesado correctamente.`);
+// }
 
-// Iniciar el servidor
-app.listen(port, () => {
-  console.log(`Servidor corriendo en http://localhost:${port}`);
-});
+// // Iniciar el procesamiento del documento
+// processDocument(targetFile).catch((err) => console.error(err));
+
+// app.use(express.json());
+
+// // Endpoint para responder preguntas (se mantiene igual)
+// app.post('/ask', async (req, res) => {
+//   const { question } = req.body;
+//   if (!question)
+//     return res.status(400).json({ error: 'Falta la pregunta en el body.' });
+
+//   try {
+//     const embedding = await openai.embeddings.create({
+//       model: 'text-embedding-ada-002',
+//       input: [question],
+//     });
+
+//     const collection = await chroma.getCollection(collectionName);
+//     const searchResults = await collection.query({
+//       queryEmbeddings: [embedding.data[0].embedding],
+//       nResults: 5,
+//     });
+
+//     const relevantChunks = searchResults.metadatas
+//       .flat()
+//       .map((meta) => meta.text)
+//       .join('\n');
+
+//     const prompt = `Basado en el siguiente contenido, responde la pregunta de manera precisa:\n\n${relevantChunks}\n\nPregunta: ${question}\nRespuesta:`;
+
+//     const response = await openai.completions.create({
+//       model: 'gpt-4-turbo',
+//       prompt,
+//       max_tokens: 300,
+//     });
+
+//     res.json({ answer: response.choices[0].text.trim() });
+//   } catch (error) {
+//     res.status(500).json({ error: error.message });
+//   }
+// });
+
+// // Iniciar el servidor
+// app.listen(port, () => {
+//   console.log(`Servidor corriendo en http://localhost:${port}`);
+// });
 
 // import express from 'express';
 // import fs from 'fs';
