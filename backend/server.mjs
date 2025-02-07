@@ -4,13 +4,13 @@ import OpenAI from "openai";
 import dotenv from 'dotenv';
 dotenv.config();
 
-const miVariable = process.env.MI_VARIABLE;
+const api = process.env.example.OPENAI;
 console.log(miVariable);
 
 const openai = new OpenAI({
         baseURL: 'https://api.deepseek.com',
         // baseURL: 'https://api.deepseek.com/v1',
-        apiKey: 'sk-7b4bcfd85ead4fd68f87b0d1b1e156ce'
+        apiKey: 'OPENAI'
 });
 
 async function main() {
