@@ -13,7 +13,7 @@ const app = express();
 const port = 3000;
 
 // Configuración de OpenAI y ChromaDB
-const openai = new OpenAI({ apiKey: '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' }); // Reemplaza con tu API key real
+const openai = new OpenAI({ apiKey: '' }); // Reemplaza con tu API key real
 const chroma = new ChromaClient();
 const collectionName = 'document_chunks';
 
@@ -140,7 +140,7 @@ app.listen(port, () => {
 // const port = 3000;
 
 // // Configuración de OpenAI y ChromaDB
-// const openai = new OpenAI({ apiKey: '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' });
+// const openai = new OpenAI({ apiKey: '' });
 // const chroma = new ChromaClient();
 // const collectionName = 'document_chunks';
 
@@ -421,7 +421,7 @@ app.listen(port, () => {
 
 // const app = express();
 // const port = 3000;
-// const openai = new OpenAI({ apiKey: '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' });
+// const openai = new OpenAI({ apiKey: '' });
 // const chroma = new ChromaClient();
 // const collectionName = 'document_chunks';
 // const documentsPath = path.join(__dirname, 'documents');
